@@ -3,18 +3,24 @@ plugins {
     `maven-publish`
 }
 
+val isCi = System.getenv("GITHUB_EVENT_NAME") != null
+
 extensions.configure<PublishingExtension> {
     repositories {
-        maven {
-            credentials(PasswordCredentials::class.java)
-
-            name = if (version.toString().endsWith("SNAPSHOT")) "paperSnapshots" else "paper" // "paper" is seemingly not defined
-            val base = "https://artifactory.papermc.io/artifactory"
-            val releasesRepoUrl = "$base/releases/"
-            val snapshotsRepoUrl = "$base/snapshots/"
-            setUrl(if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl)
+        if (isCi) {
+            repositories {
+                maven {
+                    name = "GitHubPackages"
+                    url = uri("https://maven.pkg.github.com/poweredbyapartium/velocity")
+                    credentials {
+                        username = System.getenv("GITHUB_ACTOR")
+                        password = System.getenv("GITHUB_TOKEN")
+                    }
+                }
+            }
         }
     }
+
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
