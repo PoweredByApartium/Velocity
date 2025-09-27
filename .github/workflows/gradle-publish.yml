@@ -10,7 +10,6 @@ name: Gradle Package
 on:
   push:
     branches:
-      - maven-publish
       - dev/3.0.0
 
 jobs:
