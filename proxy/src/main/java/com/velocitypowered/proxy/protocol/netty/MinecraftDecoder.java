@@ -74,6 +74,10 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
     MinecraftPacket packet = this.registry.createPacket(packetId);
     if (packet == null) {
       buf.readerIndex(originalReaderIndex);
+      if (this.direction == ProtocolUtils.Direction.SERVERBOUND && this.state != StateRegistry.PLAY) {
+        buf.release();
+        throw this.handleInvalidPacketId(packetId);
+      }
       ctx.fireChannelRead(buf);
     } else {
       try {
@@ -96,8 +100,8 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
   }
 
   private void doLengthSanityChecks(ByteBuf buf, MinecraftPacket packet) throws Exception {
-    int expectedMinLen = packet.expectedMinLength(buf, direction, registry.version);
-    int expectedMaxLen = packet.expectedMaxLength(buf, direction, registry.version);
+    int expectedMinLen = packet.decodeExpectedMinLength(buf, direction, registry.version);
+    int expectedMaxLen = packet.decodeExpectedMaxLength(buf, direction, registry.version);
     if (expectedMaxLen != -1 && buf.readableBytes() > expectedMaxLen) {
       throw handleOverflow(packet, expectedMaxLen, buf.readableBytes());
     }
@@ -128,6 +132,14 @@ public class MinecraftDecoder extends ChannelInboundHandlerAdapter {
     if (DEBUG) {
       return new CorruptedFrameException(
           "Error decoding " + packet.getClass() + " " + getExtraConnectionDetail(packetId), cause);
+    } else {
+      return DECODE_FAILED;
+    }
+  }
+
+  private Exception handleInvalidPacketId(int packetId) {
+    if (DEBUG) {
+      return new CorruptedFrameException("Invalid packet " + getExtraConnectionDetail(packetId));
     } else {
       return DECODE_FAILED;
     }

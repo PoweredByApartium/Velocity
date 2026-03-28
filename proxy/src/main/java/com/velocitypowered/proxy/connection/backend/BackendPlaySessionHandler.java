@@ -177,10 +177,12 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
 
   @Override
   public boolean handle(BossBarPacket packet) {
-    if (packet.getAction() == BossBarPacket.ADD) {
-      playerSessionHandler.getServerBossBars().add(packet.getUuid());
-    } else if (packet.getAction() == BossBarPacket.REMOVE) {
-      playerSessionHandler.getServerBossBars().remove(packet.getUuid());
+    if (serverConn.getPlayer().getProtocolVersion().lessThan(ProtocolVersion.MINECRAFT_1_20_2)) {
+      if (packet.getAction() == BossBarPacket.ADD) {
+        playerSessionHandler.getServerBossBars().add(packet.getUuid());
+      } else if (packet.getAction() == BossBarPacket.REMOVE) {
+        playerSessionHandler.getServerBossBars().remove(packet.getUuid());
+      }
     }
     return false; // forward
   }
@@ -450,8 +452,8 @@ public class BackendPlaySessionHandler implements MinecraftSessionHandler {
 
   @Override
   public void handleGeneric(MinecraftPacket packet) {
-    if (packet instanceof PluginMessagePacket) {
-      ((PluginMessagePacket) packet).retain();
+    if (packet instanceof PluginMessagePacket pluginMessage) {
+      pluginMessage.retain();
     }
     playerConnection.delayedWrite(packet);
     if (++packetsFlushed >= MAXIMUM_PACKETS_TO_FLUSH) {

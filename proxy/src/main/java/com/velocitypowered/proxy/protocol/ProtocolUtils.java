@@ -36,7 +36,9 @@ import io.netty.handler.codec.EncoderException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.nbt.BinaryTag;
@@ -44,6 +46,7 @@ import net.kyori.adventure.nbt.BinaryTagIO;
 import net.kyori.adventure.nbt.BinaryTagType;
 import net.kyori.adventure.nbt.BinaryTagTypes;
 import net.kyori.adventure.nbt.CompoundBinaryTag;
+import net.kyori.adventure.sound.Sound;
 import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import net.kyori.adventure.text.serializer.json.JSONOptions;
 import net.kyori.adventure.text.serializer.json.legacyimpl.NBTLegacyHoverEventSerializer;
@@ -61,6 +64,8 @@ public enum ProtocolUtils {
           .legacyHoverEventSerializer(NBTLegacyHoverEventSerializer.get())
           .options(
               OptionSchema.globalSchema().stateBuilder()
+              // general options
+              .value(JSONOptions.EMIT_CLICK_URL_HTTPS, Boolean.TRUE)
               // before 1.16
               .value(JSONOptions.EMIT_RGB, Boolean.FALSE)
               .value(JSONOptions.EMIT_HOVER_EVENT_TYPE, JSONOptions.HoverEventValueMode.VALUE_FIELD)
@@ -79,6 +84,8 @@ public enum ProtocolUtils {
           .legacyHoverEventSerializer(NBTLegacyHoverEventSerializer.get())
           .options(
               OptionSchema.globalSchema().stateBuilder()
+              // general options
+              .value(JSONOptions.EMIT_CLICK_URL_HTTPS, Boolean.TRUE)
               // after 1.16
               .value(JSONOptions.EMIT_RGB, Boolean.TRUE)
               .value(JSONOptions.EMIT_HOVER_EVENT_TYPE, JSONOptions.HoverEventValueMode.CAMEL_CASE)
@@ -98,6 +105,8 @@ public enum ProtocolUtils {
           .legacyHoverEventSerializer(NBTLegacyHoverEventSerializer.get())
           .options(
               OptionSchema.globalSchema().stateBuilder()
+              // general options
+              .value(JSONOptions.EMIT_CLICK_URL_HTTPS, Boolean.TRUE)
               // after 1.16
               .value(JSONOptions.EMIT_RGB, Boolean.TRUE)
               .value(JSONOptions.EMIT_HOVER_EVENT_TYPE, JSONOptions.HoverEventValueMode.CAMEL_CASE)
@@ -117,6 +126,8 @@ public enum ProtocolUtils {
           .legacyHoverEventSerializer(NBTLegacyHoverEventSerializer.get())
           .options(
               OptionSchema.globalSchema().stateBuilder()
+              // general options
+              .value(JSONOptions.EMIT_CLICK_URL_HTTPS, Boolean.TRUE)
               // after 1.16
               .value(JSONOptions.EMIT_RGB, Boolean.TRUE)
               .value(JSONOptions.EMIT_HOVER_EVENT_TYPE, JSONOptions.HoverEventValueMode.SNAKE_CASE)
@@ -141,7 +152,7 @@ public enum ProtocolUtils {
       BinaryTagTypes.COMPOUND, BinaryTagTypes.INT_ARRAY, BinaryTagTypes.LONG_ARRAY};
   private static final QuietDecoderException BAD_VARINT_CACHED =
       new QuietDecoderException("Bad VarInt decoded");
-  private static final int[] VAR_INT_LENGTHS = new int[65];
+  private static final int[] VAR_INT_LENGTHS = new int[33];
 
   static {
     for (int i = 0; i <= 32; ++i) {
@@ -149,6 +160,9 @@ public enum ProtocolUtils {
     }
     VAR_INT_LENGTHS[32] = 1; // Special case for the number 0.
   }
+
+  public static final int DEFAULT_MAX_STRING_BYTES = varIntBytes(ByteBufUtil.utf8MaxBytes(DEFAULT_MAX_STRING_SIZE))
+          + ByteBufUtil.utf8MaxBytes(DEFAULT_MAX_STRING_SIZE);
 
   private static DecoderException badVarint() {
     return MinecraftDecoder.DEBUG ? new CorruptedFrameException("Bad VarInt decoded")
@@ -241,16 +255,15 @@ public enum ProtocolUtils {
   }
 
   /**
-   * Writes the specified {@code value} as a 21-bit Minecraft VarInt to the specified {@code buf}.
+   * Directly encodes a 21-bit Minecraft VarInt, ready to be written with {@link ByteBuf#writeMedium(int)}.
    * The upper 11 bits will be discarded.
    *
-   * @param buf   the buffer to read from
-   * @param value the integer to write
+   * @param value the value to encode
+   * @return the encoded value
    */
-  public static void write21BitVarInt(ByteBuf buf, int value) {
+  public static int encode21BitVarInt(int value) {
     // See https://steinborn.me/posts/performance/how-fast-can-you-write-a-varint/
-    int w = (value & 0x7F | 0x80) << 16 | ((value >>> 7) & 0x7F | 0x80) << 8 | (value >>> 14);
-    buf.writeMedium(w);
+    return (value & 0x7F | 0x80) << 16 | ((value >>> 7) & 0x7F | 0x80) << 8 | (value >>> 14);
   }
 
   public static String readString(ByteBuf buf) {
@@ -285,6 +298,17 @@ public enum ProtocolUtils {
   }
 
   /**
+   * Determines the size of the written {@code str} if encoded as a VarInt-prefixed UTF-8 string.
+   *
+   * @param str the string to write
+   * @return the encoded size
+   */
+  public static int stringSizeHint(CharSequence str) {
+    int size = ByteBufUtil.utf8Bytes(str);
+    return varIntBytes(size) + size;
+  }
+
+  /**
    * Writes the specified {@code str} to the {@code buf} with a VarInt prefix.
    *
    * @param buf the buffer to write to
@@ -314,6 +338,16 @@ public enum ProtocolUtils {
    */
   public static void writeKey(ByteBuf buf, Key key) {
     writeString(buf, key.asString());
+  }
+
+  /**
+   * Writes the key to the buffer, dropping the "minecraft:" namespace when present.
+   *
+   * @param buf the buffer to write to
+   * @param key the key to write
+   */
+  public static void writeMinimalKey(ByteBuf buf, Key key) {
+    writeString(buf, key.asMinimalString());
   }
 
   /**
@@ -386,7 +420,10 @@ public enum ProtocolUtils {
    */
   public static int[] readIntegerArray(ByteBuf buf) {
     int len = readVarInt(buf);
-    checkArgument(len >= 0, "Got a negative-length integer array (%s)", len);
+    checkFrame(len >= 0, "Got a negative-length integer array (%s)", len);
+    checkFrame(buf.isReadable(len),
+        "Trying to read an array that is too long (wanted %s, only have %s)", len,
+        buf.readableBytes());
     int[] array = new int[len];
     for (int i = 0; i < len; i++) {
       array[i] = readVarInt(buf);
@@ -506,6 +543,10 @@ public enum ProtocolUtils {
    */
   public static String[] readStringArray(ByteBuf buf) {
     int length = readVarInt(buf);
+    checkFrame(length >= 0, "Got a negative-length array (%s)", length);
+    checkFrame(buf.isReadable(length),
+        "Trying to read an array that is too long (wanted %s, only have %s)", length,
+        buf.readableBytes());
     String[] ret = new String[length];
     for (int i = 0; i < length; i++) {
       ret[i] = readString(buf);
@@ -617,6 +658,9 @@ public enum ProtocolUtils {
 
     checkArgument(len <= FORGE_MAX_ARRAY_LENGTH,
         "Cannot receive array longer than %s (got %s bytes)", FORGE_MAX_ARRAY_LENGTH, len);
+    checkFrame(buf.isReadable(len),
+        "Trying to read an array that is too long (wanted %s, only have %s)", len,
+        buf.readableBytes());
 
     byte[] ret = new byte[len];
     buf.readBytes(ret);
@@ -779,6 +823,63 @@ public enum ProtocolUtils {
     IdentifiedKey.Revision revision = version.noGreaterOrLessThan(ProtocolVersion.MINECRAFT_1_19)
         ? IdentifiedKey.Revision.GENERIC_V1 : IdentifiedKey.Revision.LINKED_V2;
     return new IdentifiedKeyImpl(revision, key, expiry, signature);
+  }
+
+  /**
+   * Reads a {@link Sound.Source} from the buffer.
+   *
+   * @param buf the buffer
+   * @param version the protocol version
+   * @return the sound source
+   */
+  public static Sound.Source readSoundSource(ByteBuf buf, ProtocolVersion version) {
+    int ordinal = readVarInt(buf);
+
+    if (version.lessThan(ProtocolVersion.MINECRAFT_1_21_5)
+        && ordinal == Sound.Source.UI.ordinal()) {
+      throw new UnsupportedOperationException("UI sound-source is only supported in 1.21.5+");
+    }
+
+    return Sound.Source.values()[ordinal];
+  }
+
+  /**
+   * Writes a {@link Sound.Source} to the buffer.
+   *
+   * @param buf the buffer
+   * @param version the protocol version
+   * @param source the sound source to write
+   */
+  public static void writeSoundSource(ByteBuf buf, ProtocolVersion version, Sound.Source source) {
+    if (version.lessThan(ProtocolVersion.MINECRAFT_1_21_5)
+        && source == Sound.Source.UI) {
+      throw new UnsupportedOperationException("UI sound-source is only supported in 1.21.5+");
+    }
+
+    writeVarInt(buf, source.ordinal());
+  }
+
+  /**
+   * Returns a pre-sized list with a max initial size of {@code Short.MAX_VALUE}.
+   *
+   * @param initialCapacity expected initial capacity
+   * @param <T> entry type
+   * @return pre-sized list
+   */
+  public static <T> List<T> newList(int initialCapacity) {
+    return new ArrayList<>(Math.min(initialCapacity, Short.MAX_VALUE));
+  }
+
+  /**
+   * Returns a pre-sized map with a max initial size of {@code Short.MAX_VALUE}.
+   *
+   * @param initialCapacity expected initial capacity
+   * @param <K> key type
+   * @param <V> value type
+   * @return pre-sized map
+   */
+  public static <K, V> Map<K, V> newMap(int initialCapacity) {
+    return new HashMap<>(Math.min(initialCapacity, Short.MAX_VALUE));
   }
 
   /**

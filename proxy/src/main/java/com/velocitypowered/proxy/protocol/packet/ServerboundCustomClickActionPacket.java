@@ -21,10 +21,13 @@ import com.velocitypowered.api.network.ProtocolVersion;
 import com.velocitypowered.proxy.connection.MinecraftSessionHandler;
 import com.velocitypowered.proxy.protocol.MinecraftPacket;
 import com.velocitypowered.proxy.protocol.ProtocolUtils;
+import com.velocitypowered.proxy.protocol.ProtocolUtils.Direction;
 import com.velocitypowered.proxy.protocol.util.DeferredByteBufHolder;
 import io.netty.buffer.ByteBuf;
 
 public class ServerboundCustomClickActionPacket extends DeferredByteBufHolder implements MinecraftPacket {
+
+  private static final int MAX_TAG_SIZE = 65536;
 
   public ServerboundCustomClickActionPacket() {
     super(null);
@@ -41,8 +44,22 @@ public class ServerboundCustomClickActionPacket extends DeferredByteBufHolder im
   }
 
   @Override
+  public int decodeExpectedMaxLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
+    return ProtocolUtils.DEFAULT_MAX_STRING_BYTES + ProtocolUtils.varIntBytes(MAX_TAG_SIZE) + MAX_TAG_SIZE;
+  }
+
+  @Override
+  public int decodeExpectedMinLength(ByteBuf buf, Direction direction, ProtocolVersion version) {
+    return 1 + 0 + 1 + 0;
+  }
+
+  @Override
   public boolean handle(MinecraftSessionHandler handler) {
     return handler.handle(this);
   }
 
+  @Override
+  public int encodeSizeHint(Direction direction, ProtocolVersion version) {
+    return content().readableBytes();
+  }
 }
