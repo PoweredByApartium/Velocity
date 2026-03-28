@@ -24,6 +24,10 @@ extensions.configure<PublishingExtension> {
     publications {
         create<MavenPublication>("maven") {
             from(components["java"])
+            if (components.findByName("shadowJar") != null) {
+                artifact(tasks["shadowJar"])
+            }
+
             pom {
                 name.set("Velocity")
                 description.set("The modern, next-generation Minecraft server proxy")
